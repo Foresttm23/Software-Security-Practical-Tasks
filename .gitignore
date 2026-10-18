@@ -9,3 +9,5 @@ wheels/
 # Virtual environments
 .venv
 .idea
+# Звіти
+pr3/report/

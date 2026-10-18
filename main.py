@@ -16,24 +16,24 @@ from pr2.cipher import (
     TrithemiusKnownPlaintextAttack,
     AttackResult,
 )
+from pr3.cipher import (
+    PoemKey,
+    PoemCipher,
+    BealeCipher,
+    OttendorfCipher,
+    BookCipherBase,
+    POEM_PRESETS,
+    BOOK_SAMPLE,
+    UK_ALPHABET,
+    RU_ALPHABET,
+)
 
 
 class App(tk.Tk):
-    """
-    Головний застосунок криптографічної системи (Software Security Practical Tasks).
-    Уніфікований клас APP, який розширюється при додаванні нових лабораторних робіт:
-      • ПР1: Шифр Цезаря (текст, двійкові файли, Brute-Force злам)
-      • ПР2: Шифр Тритеміуса (2D/3D вектори, гасло, двійкові файли, активна атака KPA)
-      • Наступні ПР (легко додаються окремими секціями методів)
-    """
-
-    # =========================================================================
-    # СЕКЦІЯ 0: ІНІЦІАЛІЗАЦІЯ ТА ГОЛОВНИЙ ІНТЕРФЕЙС
-    # =========================================================================
     def __init__(self):
         super().__init__()
         self.title("Комп'ютерні практикуми з безпеки ПЗ; ТВ-31 Гогуля Максим")
-        self.geometry("960x730")
+        self.geometry("1440x800")
         self.minsize(800, 580)
 
         self._init_ciphers()
@@ -52,6 +52,13 @@ class App(tk.Tk):
         self.trithemius_binary_cipher = BinaryTrithemiusCipher()
         self.trithemius_attack = TrithemiusKnownPlaintextAttack(self.trithemius_cipher)
         self._trithemius_last_attack_result: Optional[AttackResult] = None
+
+        # --- ПР3: Книжковий шифр ---
+        self.poem_cipher = PoemCipher()
+        self.book_ciphers: dict[str, BookCipherBase] = {
+            "beale": BealeCipher(),
+            "ottendorf": OttendorfCipher(),
+        }
 
         # Спільні поля та аліаси для зворотної сумісності
         self.cipher = self.trithemius_cipher
@@ -105,7 +112,22 @@ class App(tk.Tk):
         self.notebook.add(self.tab_trithemius_attack, text="🎯 ПР2: Активна атака (KPA)")
         self._trithemius_build_attack_tab()
 
-        # 5. Двійкове шифрування файлів (Binary) для всіх алгоритмів
+        # 5. ПР3: Віршований шифр
+        self.tab_poem = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_poem, text="📖 ПР3: Віршований шифр")
+        self._poem_build_tab()
+
+        # 6. ПР3: Ключова таблиця вірша
+        self.tab_poem_table = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_poem_table, text="🔢 ПР3: Таблиця вірша")
+        self._poem_build_table_tab()
+
+        # 7. ПР3: Інші книжкові шифри (додаткове завдання)
+        self.tab_book = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_book, text="📚 ПР3: Біл / Оттендорф")
+        self._book_build_tab()
+
+        # 8. Двійкове шифрування файлів (Binary) для всіх алгоритмів
         self.tab_binary = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_binary, text="📁 Шифрування файлів (Binary)")
         self._binary_build_tab()
@@ -120,14 +142,15 @@ class App(tk.Tk):
         self.bin_key_entry = self.binary_key_entry
         self.lang_var = self.trithemius_lang_var
 
-    # =========================================================================
-    # СЕКЦІЯ 1: СПІЛЬНІ СИСТЕМНІ ТА ФАЙЛОВІ МЕТОДИ (COMMON)
-    # =========================================================================
     def _get_active_text_widgets(self) -> tuple[tk.Text, tk.Text]:
         """Повертає пару текстових полів (вхід/вихід) поточної активної вкладки."""
         current_tab = self.notebook.select()
         if current_tab == str(self.tab_caesar):
             return self.caesar_txt_input, self.caesar_txt_output
+        if current_tab == str(self.tab_poem):
+            return self.poem_txt_input, self.poem_txt_output
+        if current_tab == str(self.tab_book):
+            return self.book_txt_input, self.book_txt_output
         return self.trithemius_txt_input, self.trithemius_txt_output
 
     def file_new(self):
@@ -195,14 +218,12 @@ class App(tk.Tk):
             "Дисципліна: Безпека програмного забезпечення\n"
             "Комп'ютерні практикуми:\n"
             "• ПР1: «Шифр Цезаря» (Текстовий шифр, Brute-Force, Binary)\n"
-            "• ПР2: «Шифр Тритеміуса» (2D/3D векторні ключі, Гасло, KPA-атака, Binary)\n\n"
+            "• ПР2: «Шифр Тритеміуса» (2D/3D векторні ключі, Гасло, KPA-атака, Binary)\n"
+            "• ПР3: «Книжковий шифр» (Віршований шифр, ключова таблиця, шифри Біла та Оттендорфа)\n\n"
             "Архітектура системи побудована на єдиному модульному класі APP,\n"
             "що автоматично розширюється при додаванні нових практичних робіт.\n",
         )
 
-    # =========================================================================
-    # СЕКЦІЯ 2: СПЕЦИФІЧНІ МЕТОДИ ПР1 — ШИФР ЦЕЗАРЯ (_caesar_...)
-    # =========================================================================
     def _caesar_build_tab(self):
         """Побудова вкладки текстового шифру Цезаря."""
         toolbar = ttk.Frame(self.tab_caesar)
@@ -350,9 +371,6 @@ class App(tk.Tk):
         except Exception as e:
             messagebox.showerror("Помилка Brute-Force", str(e))
 
-    # =========================================================================
-    # СЕКЦІЯ 3: СПЕЦИФІЧНІ МЕТОДИ ПР2 — ШИФР ТРИТЕМІУСА (_trithemius_...)
-    # =========================================================================
     def _trithemius_build_tab(self):
         """Побудова вкладки текстового шифру Тритеміуса (ПР2)."""
         toolbar = ttk.Frame(self.tab_trithemius)
@@ -585,9 +603,6 @@ class App(tk.Tk):
         self.notebook.select(self.tab_trithemius)
         messagebox.showinfo("Ключ перенесено", f"Ключ '{key_str}' встановлено у шифратор Тритеміуса!")
 
-    # =========================================================================
-    # СЕКЦІЯ 4: СПЕЦИФІЧНІ МЕТОДИ ДВІЙКОВОГО ШИФРУВАННЯ ФАЙЛІВ (_binary_...)
-    # =========================================================================
     def _binary_build_tab(self):
         """Побудова вкладки двійкового шифрування файлів (Цезар / Тритеміус mod 256)."""
         f = ttk.Frame(self.tab_binary, padding=12)
@@ -673,14 +688,360 @@ class App(tk.Tk):
         except Exception as e:
             messagebox.showerror("Помилка", f"Не вдалося обробити файл:\n{e}")
 
-    # =========================================================================
-    # АЛІАСИ ДЛЯ ЗВОРОТНОЇ СУМІСНОСТІ
-    # =========================================================================
+    @staticmethod
+    def _set_text(widget: tk.Text, value: str):
+        widget.delete("1.0", tk.END)
+        widget.insert("1.0", value)
+
+    @staticmethod
+    def _get_text(widget: tk.Text) -> str:
+        return widget.get("1.0", tk.END).rstrip("\n")
+
+    def _poem_build_tab(self):
+        toolbar = ttk.Frame(self.tab_poem)
+        toolbar.pack(fill=tk.X, padx=5, pady=4)
+
+        ttk.Button(toolbar, text="📄 Новий", command=self.file_new).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="📂 Відкрити", command=self.file_open).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="💾 Зберегти", command=self.file_save).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="🖨️ Друк", command=self.file_print).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="🔄 Поміняти місцями", command=self._poem_swap_text).pack(side=tk.LEFT, padx=6)
+
+        params_box = ttk.LabelFrame(self.tab_poem, text="Параметри віршованого шифру (ПР3)", padding=8)
+        params_box.pack(fill=tk.X, padx=5, pady=4)
+
+        row1 = ttk.Frame(params_box)
+        row1.pack(fill=tk.X, pady=2)
+
+        ttk.Label(row1, text="Вірш-ключ:").pack(side=tk.LEFT, padx=4)
+        self.poem_preset_var = tk.StringVar(value=next(iter(POEM_PRESETS)))
+        preset_box = ttk.Combobox(
+            row1,
+            textvariable=self.poem_preset_var,
+            values=list(POEM_PRESETS),
+            state="readonly",
+            width=40,
+        )
+        preset_box.pack(side=tk.LEFT, padx=4)
+        preset_box.bind("<<ComboboxSelected>>", lambda _e: self._poem_load_preset())
+
+        ttk.Label(row1, text="Рядків:").pack(side=tk.LEFT, padx=6)
+        self.poem_rows_var = tk.StringVar(value="10")
+        ttk.Spinbox(row1, from_=1, to=PoemKey.MAX_DIM, textvariable=self.poem_rows_var, width=4).pack(side=tk.LEFT)
+        ttk.Label(row1, text="Стовпців:").pack(side=tk.LEFT, padx=6)
+        self.poem_cols_var = tk.StringVar(value="10")
+        ttk.Spinbox(row1, from_=1, to=PoemKey.MAX_DIM, textvariable=self.poem_cols_var, width=4).pack(side=tk.LEFT)
+
+        ttk.Button(row1, text="🔒 Зашифрувати", command=lambda: self._poem_process_text(True)).pack(side=tk.LEFT, padx=10)
+        ttk.Button(row1, text="🔓 Розшифрувати", command=lambda: self._poem_process_text(False)).pack(side=tk.LEFT, padx=2)
+
+        row2 = ttk.Frame(params_box)
+        row2.pack(fill=tk.X, pady=2)
+        self.poem_substitute_var = tk.BooleanVar(value=True)
+        self.poem_keep_spaces_var = tk.BooleanVar(value=True)
+        self.poem_strict_var = tk.BooleanVar(value=False)
+        self.poem_avoid_repeats_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(row2, text="Заміна відсутніх літер (Щ→Ш, Ґ→Г …)", variable=self.poem_substitute_var).pack(side=tk.LEFT, padx=4)
+        ttk.Checkbutton(row2, text="Кодувати пробіли (00/00)", variable=self.poem_keep_spaces_var).pack(side=tk.LEFT, padx=4)
+        ttk.Checkbutton(row2, text="Не повторювати координати", variable=self.poem_avoid_repeats_var).pack(side=tk.LEFT, padx=4)
+        ttk.Checkbutton(row2, text="Строгий режим (без втрат)", variable=self.poem_strict_var).pack(side=tk.LEFT, padx=4)
+
+        ttk.Label(
+            params_box,
+            text="Кожна літера → код РР/СС (рядок/стовпчик) випадково обраного входження цієї літери у вірші; коди розділяються комами.",
+            font=("Arial", 8, "italic"),
+        ).pack(anchor=tk.W, pady=2)
+
+        content_frame = ttk.Frame(self.tab_poem)
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=4)
+
+        f_key = ttk.LabelFrame(content_frame, text="Вірш-ключ (рядок вірша = рядок таблиці)", padding=5)
+        f_key.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=3)
+        self.poem_txt_key = tk.Text(f_key, wrap=tk.NONE, width=34, font=("Consolas", 10))
+        self.poem_txt_key.pack(fill=tk.BOTH, expand=True)
+
+        f_left = ttk.LabelFrame(content_frame, text="Вхідний текст", padding=5)
+        f_left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=3)
+        self.poem_txt_input = tk.Text(f_left, wrap=tk.WORD, width=34, font=("Consolas", 10))
+        self.poem_txt_input.insert("1.0", "Сообщите товарищу")
+        self.poem_txt_input.pack(fill=tk.BOTH, expand=True)
+
+        f_right = ttk.LabelFrame(content_frame, text="Результат", padding=5)
+        f_right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=3)
+        self.poem_txt_output = tk.Text(f_right, wrap=tk.WORD, width=34, font=("Consolas", 10))
+        self.poem_txt_output.pack(fill=tk.BOTH, expand=True)
+
+        self.poem_lbl_status = ttk.Label(self.tab_poem, text="", font=("Arial", 9, "bold"), foreground="darkblue")
+        self.poem_lbl_status.pack(anchor=tk.W, padx=8, pady=(0, 6))
+
+        self._poem_load_preset()
+
+    def _poem_load_preset(self):
+        self._set_text(self.poem_txt_key, POEM_PRESETS[self.poem_preset_var.get()])
+
+    def _poem_get_key(self) -> Optional[PoemKey]:
+        """Ключ з полів вкладки; при помилці показує повідомлення і повертає None."""
+        try:
+            rows = int(self.poem_rows_var.get())
+            cols = int(self.poem_cols_var.get())
+        except ValueError:
+            messagebox.showerror("Помилка ключа", "Розміри таблиці повинні бути цілими числами 1..99.")
+            return None
+        try:
+            return PoemKey(self._get_text(self.poem_txt_key), rows, cols)
+        except (TypeError, ValueError) as e:
+            messagebox.showerror("Помилка ключа", str(e))
+            return None
+
+    def _poem_process_text(self, is_encrypt: bool):
+        key = self._poem_get_key()
+        if key is None:
+            return
+        text = self._get_text(self.poem_txt_input)
+
+        try:
+            if is_encrypt:
+                options = dict(
+                    substitute=self.poem_substitute_var.get(),
+                    keep_spaces=self.poem_keep_spaces_var.get(),
+                )
+                report = self.poem_cipher.analyze(text, key, **options)
+                res = self.poem_cipher.encrypt(
+                    text,
+                    key,
+                    strict=self.poem_strict_var.get(),
+                    avoid_repeats=self.poem_avoid_repeats_var.get(),
+                    **options,
+                )
+                status = ("" if report.lossless else "Увага! ") + report.summary()
+            else:
+                res = self.poem_cipher.decrypt(text, key)
+                status = f"Розшифровано символів: {len(res)}"
+            self._set_text(self.poem_txt_output, res)
+            self.poem_lbl_status.config(text=status, foreground="darkorange" if status.startswith("Увага!") else "darkblue")
+        except Exception as e:
+            self.poem_lbl_status.config(text=f"{e}", foreground="red")
+            messagebox.showerror("Помилка обробки", str(e))
+
+    def _poem_swap_text(self):
+        in_t = self._get_text(self.poem_txt_input)
+        self._set_text(self.poem_txt_input, self._get_text(self.poem_txt_output))
+        self._set_text(self.poem_txt_output, in_t)
+
+    def _poem_build_table_tab(self):
+        f = ttk.Frame(self.tab_poem_table, padding=8)
+        f.pack(fill=tk.BOTH, expand=True)
+
+        top_bar = ttk.Frame(f)
+        top_bar.pack(fill=tk.X, pady=4)
+        ttk.Button(top_bar, text="🔄 Побудувати таблицю з вірша (вкладка ПР3)", command=self._poem_refresh_table).pack(side=tk.LEFT, padx=4)
+        ttk.Label(top_bar, text="Літера:").pack(side=tk.LEFT, padx=(16, 4))
+        self.poem_find_entry = ttk.Entry(top_bar, width=4)
+        self.poem_find_entry.insert(0, "О")
+        self.poem_find_entry.pack(side=tk.LEFT)
+        ttk.Button(top_bar, text="🔍 Координати літери", command=self._poem_find_letter).pack(side=tk.LEFT, padx=4)
+
+        self.poem_lbl_find = ttk.Label(f, text="", font=("Consolas", 9), foreground="darkblue", wraplength=1100)
+        self.poem_lbl_find.pack(anchor=tk.W, pady=2)
+
+        body = ttk.Frame(f)
+        body.pack(fill=tk.BOTH, expand=True)
+
+        grid_box = ttk.LabelFrame(body, text="Ключова сторінка: рядки (РР) × стовпчики (СС)", padding=4)
+        grid_box.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
+        self.poem_grid_tree = ttk.Treeview(grid_box, show="headings", selectmode="none")
+        grid_scroll_x = ttk.Scrollbar(grid_box, orient=tk.HORIZONTAL, command=self.poem_grid_tree.xview)
+        self.poem_grid_tree.configure(xscrollcommand=grid_scroll_x.set)
+        grid_scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
+        self.poem_grid_tree.pack(fill=tk.BOTH, expand=True)
+
+        freq_box = ttk.LabelFrame(body, text="Частоти літер у ключі", padding=4)
+        freq_box.pack(side=tk.RIGHT, fill=tk.Y, padx=2)
+        self.poem_freq_tree = ttk.Treeview(freq_box, columns=("letter", "count", "share"), show="headings", height=18)
+        self.poem_freq_tree.heading("letter", text="Літера")
+        self.poem_freq_tree.heading("count", text="Входжень")
+        self.poem_freq_tree.heading("share", text="Частка")
+        for col, width in (("letter", 60), ("count", 75), ("share", 70)):
+            self.poem_freq_tree.column(col, width=width, anchor=tk.CENTER)
+        freq_scroll = ttk.Scrollbar(freq_box, orient=tk.VERTICAL, command=self.poem_freq_tree.yview)
+        self.poem_freq_tree.configure(yscrollcommand=freq_scroll.set)
+        self.poem_freq_tree.pack(side=tk.LEFT, fill=tk.Y)
+        freq_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.poem_lbl_missing = ttk.Label(f, text="", font=("Arial", 9), foreground="darkred", wraplength=1100)
+        self.poem_lbl_missing.pack(anchor=tk.W, pady=4)
+
+        self._poem_refresh_table(silent=True)
+
+    def _poem_refresh_table(self, silent: bool = False):
+        key = self._poem_get_key()
+        if key is None:
+            return
+
+        tree = self.poem_grid_tree
+        tree.delete(*tree.get_children())
+        columns = ["row"] + [f"{c:02d}" for c in range(1, key.cols + 1)]
+        tree["columns"] = columns
+        tree.heading("row", text="РР \\ СС")
+        tree.column("row", width=60, anchor=tk.CENTER, stretch=False)
+        for col in columns[1:]:
+            tree.heading(col, text=col)
+            tree.column(col, width=34, anchor=tk.CENTER, stretch=False)
+        tree.configure(height=min(key.rows, 20))
+        for r, row in enumerate(key.grid, start=1):
+            tree.insert("", tk.END, values=[f"{r:02d}"] + row)
+
+        self.poem_freq_tree.delete(*self.poem_freq_tree.get_children())
+        counts = key.letter_counts()
+        total = sum(counts.values())
+        for ch, cnt in counts.items():
+            self.poem_freq_tree.insert("", tk.END, values=(ch, cnt, f"{cnt / total:.1%}"))
+
+        self.poem_lbl_missing.config(
+            text=f"Заповнено клітинок: {total} з {key.rows * key.cols}.   "
+                 f"Відсутні літери (укр.): {' '.join(key.missing_letters(UK_ALPHABET)) or '—'}   |   "
+                 f"(рос.): {' '.join(key.missing_letters(RU_ALPHABET)) or '—'}"
+        )
+        self._poem_find_letter()
+        if not silent:
+            self.notebook.select(self.tab_poem_table)
+
+    def _poem_find_letter(self):
+        key = self._poem_get_key()
+        raw = self.poem_find_entry.get().strip()
+        if key is None or not raw:
+            return
+        ch = raw[0].upper()
+        coords = key.positions(ch)
+        if coords:
+            codes = ", ".join(self.poem_cipher.format_coord(c) for c in coords)
+            self.poem_lbl_find.config(text=f"«{ch}» — {len(coords)} входжень: {codes}", foreground="darkblue")
+        else:
+            self.poem_lbl_find.config(text=f"«{ch}» відсутня в ключовій таблиці.", foreground="red")
+
+    BOOK_DESCRIPTIONS = {
+        "beale": "Шифр Біла: літера → номер слова тексту-книги, яке починається з цієї літери (0 — пробіл). "
+                 "Слова нумеруються з 1 підряд по всьому тексту.",
+        "ottendorf": "Шифр Оттендорфа: літера → «рядок-слово-літера» у тексті-книзі (0-0-0 — пробіл). "
+                     "Рядки без слів не нумеруються.",
+    }
+
+    def _book_build_tab(self):
+        toolbar = ttk.Frame(self.tab_book)
+        toolbar.pack(fill=tk.X, padx=5, pady=4)
+
+        ttk.Button(toolbar, text="📄 Новий", command=self.file_new).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="📂 Відкрити", command=self.file_open).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="💾 Зберегти", command=self.file_save).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="🖨️ Друк", command=self.file_print).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="🔄 Поміняти місцями", command=self._book_swap_text).pack(side=tk.LEFT, padx=6)
+        ttk.Button(toolbar, text="📂 Відкрити книгу-ключ...", command=self._book_open_key).pack(side=tk.LEFT, padx=6)
+
+        params_box = ttk.LabelFrame(self.tab_book, text="Різновиди книжкового шифру (додаткове завдання ПР3)", padding=8)
+        params_box.pack(fill=tk.X, padx=5, pady=4)
+
+        row1 = ttk.Frame(params_box)
+        row1.pack(fill=tk.X, pady=2)
+        ttk.Label(row1, text="Шифр:").pack(side=tk.LEFT, padx=4)
+        self.book_algo_var = tk.StringVar(value="beale")
+        ttk.Radiobutton(row1, text="Шифр Біла (номер слова)", variable=self.book_algo_var, value="beale",
+                        command=self._book_update_description).pack(side=tk.LEFT, padx=6)
+        ttk.Radiobutton(row1, text="Шифр Оттендорфа (рядок-слово-літера)", variable=self.book_algo_var, value="ottendorf",
+                        command=self._book_update_description).pack(side=tk.LEFT, padx=6)
+
+        ttk.Button(row1, text="🔒 Зашифрувати", command=lambda: self._book_process_text(True)).pack(side=tk.LEFT, padx=10)
+        ttk.Button(row1, text="🔓 Розшифрувати", command=lambda: self._book_process_text(False)).pack(side=tk.LEFT, padx=2)
+
+        row2 = ttk.Frame(params_box)
+        row2.pack(fill=tk.X, pady=2)
+        self.book_substitute_var = tk.BooleanVar(value=True)
+        self.book_keep_spaces_var = tk.BooleanVar(value=True)
+        self.book_strict_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(row2, text="Заміна відсутніх літер", variable=self.book_substitute_var).pack(side=tk.LEFT, padx=4)
+        ttk.Checkbutton(row2, text="Кодувати пробіли", variable=self.book_keep_spaces_var).pack(side=tk.LEFT, padx=4)
+        ttk.Checkbutton(row2, text="Строгий режим (без втрат)", variable=self.book_strict_var).pack(side=tk.LEFT, padx=4)
+
+        self.book_lbl_description = ttk.Label(params_box, text="", font=("Arial", 8, "italic"))
+        self.book_lbl_description.pack(anchor=tk.W, pady=2)
+
+        content_frame = ttk.Frame(self.tab_book)
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=4)
+
+        f_key = ttk.LabelFrame(content_frame, text="Текст-книга (ключ)", padding=5)
+        f_key.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=3)
+        self.book_txt_key = tk.Text(f_key, wrap=tk.WORD, width=40, font=("Consolas", 9))
+        self.book_txt_key.insert("1.0", BOOK_SAMPLE)
+        self.book_txt_key.pack(fill=tk.BOTH, expand=True)
+
+        f_left = ttk.LabelFrame(content_frame, text="Вхідний текст", padding=5)
+        f_left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=3)
+        self.book_txt_input = tk.Text(f_left, wrap=tk.WORD, width=30, font=("Consolas", 10))
+        self.book_txt_input.insert("1.0", "Безпека інформаційних систем")
+        self.book_txt_input.pack(fill=tk.BOTH, expand=True)
+
+        f_right = ttk.LabelFrame(content_frame, text="Результат", padding=5)
+        f_right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=3)
+        self.book_txt_output = tk.Text(f_right, wrap=tk.WORD, width=30, font=("Consolas", 10))
+        self.book_txt_output.pack(fill=tk.BOTH, expand=True)
+
+        self.book_lbl_status = ttk.Label(self.tab_book, text="", font=("Arial", 9, "bold"), foreground="darkblue")
+        self.book_lbl_status.pack(anchor=tk.W, padx=8, pady=(0, 6))
+
+        self._book_update_description()
+
+    def _book_update_description(self):
+        self.book_lbl_description.config(text=self.BOOK_DESCRIPTIONS[self.book_algo_var.get()])
+
+    def _book_open_key(self):
+        path = filedialog.askopenfilename(
+            title="Відкрити текст-книгу (ключ)",
+            filetypes=[("Текстові файли", "*.txt"), ("Усі файли", "*.*")],
+        )
+        if path:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    self._set_text(self.book_txt_key, f.read())
+            except Exception as e:
+                messagebox.showerror("Помилка відкриття", f"Не вдалося прочитати файл:\n{e}")
+
+    def _book_process_text(self, is_encrypt: bool):
+        cipher_obj = self.book_ciphers[self.book_algo_var.get()]
+        try:
+            key = cipher_obj.build_key(self._get_text(self.book_txt_key))
+        except (TypeError, ValueError) as e:
+            messagebox.showerror("Помилка ключа", str(e))
+            return
+        text = self._get_text(self.book_txt_input)
+
+        try:
+            if is_encrypt:
+                options = dict(substitute=self.book_substitute_var.get(), keep_spaces=self.book_keep_spaces_var.get())
+                report = cipher_obj.analyze(text, key, **options)
+                res = cipher_obj.encrypt(text, key, strict=self.book_strict_var.get(), **options)
+                status = ("" if report.lossless else "Увага! ") + report.summary()
+            else:
+                res = cipher_obj.decrypt(text, key)
+                status = f"Розшифровано символів: {len(res)}"
+            self._set_text(self.book_txt_output, res)
+            self.book_lbl_status.config(text=status, foreground="darkorange" if status.startswith("Увага!") else "darkblue")
+        except Exception as e:
+            self.book_lbl_status.config(text=f"{e}", foreground="red")
+            messagebox.showerror("Помилка обробки", str(e))
+
+    def _book_swap_text(self):
+        in_t = self._get_text(self.book_txt_input)
+        self._set_text(self.book_txt_input, self._get_text(self.book_txt_output))
+        self._set_text(self.book_txt_output, in_t)
+
     def process_text(self, is_encrypt: bool):
         """Аліас для універсального виклику шифрування активної вкладки."""
         current_tab = self.notebook.select()
         if current_tab == str(self.tab_caesar):
             self._caesar_process_text(is_encrypt)
+        elif current_tab == str(self.tab_poem):
+            self._poem_process_text(is_encrypt)
+        elif current_tab == str(self.tab_book):
+            self._book_process_text(is_encrypt)
         else:
             self._trithemius_process_text(is_encrypt)
 
