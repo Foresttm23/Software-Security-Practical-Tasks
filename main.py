@@ -27,13 +27,26 @@ from pr3.cipher import (
     UK_ALPHABET,
     RU_ALPHABET,
 )
+from pr5.cipher import (
+    CIPHERS,
+    KEY_FORMATS,
+    MODES,
+    OUTPUT_FORMATS,
+    PADDINGS,
+    NetSymmetricCipher,
+    create_cipher,
+    decode_input,
+    encode_output,
+    text_to_bytes,
+    to_hex,
+)
 
 
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Комп'ютерні практикуми з безпеки ПЗ; ТВ-31 Гогуля Максим")
-        self.geometry("1440x800")
+        self.geometry("1600x800")
         self.minsize(800, 580)
 
         self._init_ciphers()
@@ -127,7 +140,17 @@ class App(tk.Tk):
         self.notebook.add(self.tab_book, text="📚 ПР3: Біл / Оттендорф")
         self._book_build_tab()
 
-        # 8. Двійкове шифрування файлів (Binary) для всіх алгоритмів
+        # 8. ПР5: DES / TripleDES / AES (криптопровайдери .NET)
+        self.tab_sym = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_sym, text="🔐 ПР5: DES / 3DES / AES")
+        self._sym_build_tab()
+
+        # 9. ПР5: Шифрування файлів через CryptoStream
+        self.tab_sym_file = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_sym_file, text="📁 ПР5: CryptoStream (файли)")
+        self._sym_build_file_tab()
+
+        # 10. Двійкове шифрування файлів (Binary) для всіх алгоритмів
         self.tab_binary = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_binary, text="📁 Шифрування файлів (Binary)")
         self._binary_build_tab()
@@ -151,6 +174,8 @@ class App(tk.Tk):
             return self.poem_txt_input, self.poem_txt_output
         if current_tab == str(self.tab_book):
             return self.book_txt_input, self.book_txt_output
+        if current_tab == str(self.tab_sym):
+            return self.sym_txt_input, self.sym_txt_output
         return self.trithemius_txt_input, self.trithemius_txt_output
 
     def file_new(self):
@@ -219,7 +244,9 @@ class App(tk.Tk):
             "Комп'ютерні практикуми:\n"
             "• ПР1: «Шифр Цезаря» (Текстовий шифр, Brute-Force, Binary)\n"
             "• ПР2: «Шифр Тритеміуса» (2D/3D векторні ключі, Гасло, KPA-атака, Binary)\n"
-            "• ПР3: «Книжковий шифр» (Віршований шифр, ключова таблиця, шифри Біла та Оттендорфа)\n\n"
+            "• ПР3: «Книжковий шифр» (Віршований шифр, ключова таблиця, шифри Біла та Оттендорфа)\n"
+            "• ПР5: «Шифр DES» (криптопровайдери .NET через pythonnet: DES, TripleDES, AES;\n"
+            "   режими ECB / CBC / CFB, доповнення, CryptoStream для тексту та файлів)\n\n"
             "Архітектура системи побудована на єдиному модульному класі APP,\n"
             "що автоматично розширюється при додаванні нових практичних робіт.\n",
         )
@@ -1033,6 +1060,230 @@ class App(tk.Tk):
         self._set_text(self.book_txt_input, self._get_text(self.book_txt_output))
         self._set_text(self.book_txt_output, in_t)
 
+    SYM_DEFAULT_KEYS = {"DES": "ABCDEFGH", "TripleDES": "ABCDEFGHIJKLMNOP", "AES": "ABCDEFGHIJKLMNOP"}
+
+    def _sym_build_params(self, parent: ttk.Frame, title: str) -> dict:
+        ctl: dict = {}
+        box = ttk.LabelFrame(parent, text=title, padding=8)
+        box.pack(fill=tk.X, padx=5, pady=4)
+
+        row1 = ttk.Frame(box)
+        row1.pack(fill=tk.X, pady=2)
+        for label, name, values, default, width in (
+            ("Шифр:", "algo", list(CIPHERS), "DES", 11),
+            ("Режим:", "mode", list(MODES), "CBC", 6),
+            ("Доповнення:", "padding", list(PADDINGS), "PKCS7", 10),
+        ):
+            ttk.Label(row1, text=label).pack(side=tk.LEFT, padx=(8, 4))
+            ctl[name] = tk.StringVar(value=default)
+            combo = ttk.Combobox(row1, textvariable=ctl[name], values=values, state="readonly", width=width)
+            combo.pack(side=tk.LEFT, padx=2)
+            combo.bind("<<ComboboxSelected>>", lambda _e, c=ctl, n=name: self._sym_on_change(c, n))
+        ctl["row1"] = row1
+
+        for name, label, gen_text in (("key", "Ключ:", "🔑 Новий ключ"), ("iv", "IV:", "🔑 Новий IV")):
+            row = ttk.Frame(box)
+            row.pack(fill=tk.X, pady=2)
+            ttk.Label(row, text=label, width=6).pack(side=tk.LEFT, padx=(8, 4))
+            ctl[name] = ttk.Entry(row, width=72, font=("Consolas", 10))
+            ctl[name].pack(side=tk.LEFT, padx=2)
+            ctl[f"{name}_fmt"] = tk.StringVar(value="ASCII")
+            ctl[f"{name}_fmt_box"] = ttk.Combobox(row, textvariable=ctl[f"{name}_fmt"], values=list(KEY_FORMATS),
+                                                 state="readonly", width=7)
+            ctl[f"{name}_fmt_box"].pack(side=tk.LEFT, padx=4)
+            ctl[f"{name}_gen"] = ttk.Button(row, text=gen_text, command=lambda c=ctl, n=name: self._sym_generate(c, n))
+            ctl[f"{name}_gen"].pack(side=tk.LEFT, padx=4)
+            ctl[f"{name}_row"] = row
+
+        ctl["embed"] = tk.BooleanVar(value=False)
+        ctl["embed_box"] = ttk.Checkbutton(ctl["iv_row"], text="IV на початку шифротексту", variable=ctl["embed"])
+        ctl["embed_box"].pack(side=tk.LEFT, padx=8)
+
+        ctl["info"] = ttk.Label(box, text="", font=("Arial", 8, "italic"))
+        ctl["info"].pack(anchor=tk.W, padx=8, pady=2)
+        self._sym_on_change(ctl, "algo")
+        return ctl
+
+    def _sym_on_change(self, ctl: dict, changed: str):
+        cipher = create_cipher(ctl["algo"].get(), ctl["mode"].get(), ctl["padding"].get())
+        if changed == "algo":
+            self._sym_set_entry(ctl["key"], self.SYM_DEFAULT_KEYS[cipher.NAME])
+            ctl["key_fmt"].set("ASCII")
+            self._sym_set_entry(ctl["iv"], "ABCDEFGHIJKLMNOP"[:cipher.block_size])
+            ctl["iv_fmt"].set("ASCII")
+
+        iv_state = "normal" if cipher.needs_iv else "disabled"
+        ctl["iv"].config(state=iv_state)
+        ctl["iv_gen"].config(state=iv_state)
+        ctl["iv_fmt_box"].config(state="readonly" if cipher.needs_iv else "disabled")
+        ctl["embed_box"].config(state=iv_state)
+
+        sizes = " / ".join(map(str, cipher.key_sizes))
+        iv_note = f"IV {cipher.block_size} байт" if cipher.needs_iv else "IV не використовується (ECB)"
+        ctl["info"].config(
+            text=f"{cipher.PROVIDER.__name__}: ключ {sizes} байт, блок {cipher.block_size} байт, {iv_note}. "
+                 f"Режими .NET Framework: ECB, CBC, CFB (8 біт); OFB та CTS провайдер відхиляє."
+        )
+
+    @staticmethod
+    def _sym_set_entry(entry: ttk.Entry, value: str):
+        state = str(entry.cget("state"))
+        entry.config(state="normal")
+        entry.delete(0, tk.END)
+        entry.insert(0, value)
+        entry.config(state=state)
+
+    def _sym_generate(self, ctl: dict, name: str):
+        cipher = create_cipher(ctl["algo"].get(), ctl["mode"].get(), ctl["padding"].get())
+        value = cipher.generate_key() if name == "key" else cipher.generate_iv()
+        ctl[f"{name}_fmt"].set("HEX")
+        self._sym_set_entry(ctl[name], to_hex(value))
+
+    def _sym_read_params(self, ctl: dict, is_encrypt: bool) -> tuple[NetSymmetricCipher, bytes, Optional[bytes], bool]:
+        cipher = create_cipher(ctl["algo"].get(), ctl["mode"].get(), ctl["padding"].get())
+        key = text_to_bytes(ctl["key"].get(), ctl["key_fmt"].get(), "Ключ")
+        embed = ctl["embed"].get() and cipher.needs_iv
+        iv = None
+        # При розшифруванні з вбудованим IV він береться з шифротексту
+        if cipher.needs_iv and not (embed and not is_encrypt):
+            iv_text = ctl["iv"].get()
+            if iv_text.strip():
+                iv = text_to_bytes(iv_text, ctl["iv_fmt"].get(), "IV")
+            elif embed:
+                iv = cipher.generate_iv()
+                ctl["iv_fmt"].set("HEX")
+                self._sym_set_entry(ctl["iv"], to_hex(iv))
+        return cipher, key, iv, embed
+
+    def _sym_build_tab(self):
+        toolbar = ttk.Frame(self.tab_sym)
+        toolbar.pack(fill=tk.X, padx=5, pady=4)
+
+        ttk.Button(toolbar, text="📄 Новий", command=self.file_new).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="📂 Відкрити", command=self.file_open).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="💾 Зберегти", command=self.file_save).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="🖨️ Друк", command=self.file_print).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="🔄 Поміняти місцями", command=self._sym_swap_text).pack(side=tk.LEFT, padx=6)
+
+        self.sym_ctl = self._sym_build_params(self.tab_sym, "Параметри криптопровайдера .NET (ПР5)")
+        row1 = self.sym_ctl["row1"]
+        ttk.Label(row1, text="Шифротекст:").pack(side=tk.LEFT, padx=(8, 4))
+        self.sym_out_fmt_var = tk.StringVar(value="Base64")
+        ttk.Combobox(row1, textvariable=self.sym_out_fmt_var, values=list(OUTPUT_FORMATS),
+                     state="readonly", width=7).pack(side=tk.LEFT, padx=2)
+        ttk.Button(row1, text="🔒 Зашифрувати", command=lambda: self._sym_process_text(True)).pack(side=tk.LEFT, padx=10)
+        ttk.Button(row1, text="🔓 Розшифрувати", command=lambda: self._sym_process_text(False)).pack(side=tk.LEFT, padx=2)
+
+        content_frame = ttk.Frame(self.tab_sym)
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=4)
+
+        f_left = ttk.LabelFrame(content_frame, text="Вхідний текст", padding=5)
+        f_left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=3)
+        self.sym_txt_input = tk.Text(f_left, wrap=tk.WORD, font=("Consolas", 10))
+        self.sym_txt_input.insert("1.0", "Hello World! Безпека інформаційних систем, ТВ-31")
+        self.sym_txt_input.pack(fill=tk.BOTH, expand=True)
+
+        f_right = ttk.LabelFrame(content_frame, text="Результат", padding=5)
+        f_right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=3)
+        self.sym_txt_output = tk.Text(f_right, wrap=tk.WORD, font=("Consolas", 10))
+        self.sym_txt_output.pack(fill=tk.BOTH, expand=True)
+
+        self.sym_lbl_status = ttk.Label(self.tab_sym, text="", font=("Arial", 9, "bold"), foreground="darkblue")
+        self.sym_lbl_status.pack(anchor=tk.W, padx=8, pady=(0, 6))
+
+    def _sym_process_text(self, is_encrypt: bool):
+        text = self._get_text(self.sym_txt_input)
+        fmt = self.sym_out_fmt_var.get()
+        try:
+            cipher, key, iv, embed = self._sym_read_params(self.sym_ctl, is_encrypt)
+            title = f"{cipher.NAME}-{cipher.mode}/{cipher.padding}"
+            if is_encrypt:
+                data = cipher.encrypt(text, key, iv)
+                if embed:
+                    data = iv + data
+                res = encode_output(data, fmt)
+                status = f"{title}: зашифровано, {len(data)} байт шифротексту" + (" (з IV на початку)" if embed else "")
+            else:
+                data = decode_input(text, fmt)
+                if embed:
+                    iv, data = cipher.split_iv(data)
+                res = cipher.decrypt(data, key, iv)
+                status = f"{title}: розшифровано {len(res)} символів" + (f", IV з шифротексту: {to_hex(iv)}" if embed else "")
+            self._set_text(self.sym_txt_output, res)
+            self.sym_lbl_status.config(text=status, foreground="darkblue")
+        except Exception as e:
+            self._set_text(self.sym_txt_output, "")
+            self.sym_lbl_status.config(text=str(e), foreground="red")
+            messagebox.showerror("Помилка обробки", str(e))
+
+    def _sym_swap_text(self):
+        in_t = self._get_text(self.sym_txt_input)
+        self._set_text(self.sym_txt_input, self._get_text(self.sym_txt_output))
+        self._set_text(self.sym_txt_output, in_t)
+
+    def _sym_build_file_tab(self):
+        f = ttk.Frame(self.tab_sym_file, padding=8)
+        f.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(
+            f,
+            text="Шифрування файлів будь-якого формату за схемою FileStream → CryptoStream → FileStream (.NET).",
+            font=("Arial", 10),
+        ).pack(anchor=tk.W, padx=5, pady=6)
+
+        btn_box = ttk.Frame(f)
+        btn_box.pack(fill=tk.X, padx=5, pady=4)
+        ttk.Button(btn_box, text="📂 Обрати файл...", command=self._sym_choose_file).pack(side=tk.LEFT, padx=4)
+        self.sym_file_path: Optional[str] = None
+        self.sym_lbl_file = ttk.Label(btn_box, text="Файл не обрано", foreground="gray")
+        self.sym_lbl_file.pack(side=tk.LEFT, padx=8)
+
+        self.sym_file_ctl = self._sym_build_params(f, "Параметри криптопровайдера .NET (ПР5)")
+
+        act_box = ttk.Frame(f)
+        act_box.pack(fill=tk.X, padx=5, pady=8)
+        ttk.Button(act_box, text="🔒 Зашифрувати файл", command=lambda: self._sym_process_file(True)).pack(side=tk.LEFT, padx=6)
+        ttk.Button(act_box, text="🔓 Розшифрувати файл", command=lambda: self._sym_process_file(False)).pack(side=tk.LEFT, padx=6)
+
+        self.sym_lbl_file_status = ttk.Label(f, text="", font=("Arial", 9, "bold"), foreground="darkblue", wraplength=1100)
+        self.sym_lbl_file_status.pack(anchor=tk.W, padx=8, pady=4)
+
+    def _sym_choose_file(self):
+        path = filedialog.askopenfilename(title="Оберіть файл для обробки")
+        if path:
+            self.sym_file_path = path
+            self.sym_lbl_file.config(text=f"{os.path.basename(path)} ({os.path.getsize(path)} байт)", foreground="black")
+
+    def _sym_process_file(self, is_encrypt: bool):
+        if not self.sym_file_path:
+            messagebox.showwarning("Увага", "Будь ласка, спочатку оберіть файл.")
+            return
+        try:
+            cipher, key, iv, embed = self._sym_read_params(self.sym_file_ctl, is_encrypt)
+        except Exception as e:
+            messagebox.showerror("Помилка параметрів", str(e))
+            return
+
+        base = os.path.basename(self.sym_file_path)
+        if is_encrypt:
+            initial = base + ".enc"
+        else:
+            initial = "dec_" + (base[:-4] if base.endswith(".enc") else base)
+        save_path = filedialog.asksaveasfilename(title="Зберегти оброблений файл як...", initialfile=initial)
+        if not save_path:
+            return
+
+        try:
+            process = cipher.encrypt_file if is_encrypt else cipher.decrypt_file
+            size = process(self.sym_file_path, save_path, key, iv, embed_iv=embed)
+            action = "Зашифровано" if is_encrypt else "Розшифровано"
+            status = f"{action} ({cipher.NAME}-{cipher.mode}/{cipher.padding}): {save_path} ({size} байт)"
+            self.sym_lbl_file_status.config(text=status, foreground="darkblue")
+            messagebox.showinfo("Успіх", f"Файл успішно збережено в:\n{save_path}\nРозмір: {size} байт.")
+        except Exception as e:
+            self.sym_lbl_file_status.config(text=str(e), foreground="red")
+            messagebox.showerror("Помилка", f"Не вдалося обробити файл:\n{e}")
+
     def process_text(self, is_encrypt: bool):
         """Аліас для універсального виклику шифрування активної вкладки."""
         current_tab = self.notebook.select()
@@ -1042,6 +1293,8 @@ class App(tk.Tk):
             self._poem_process_text(is_encrypt)
         elif current_tab == str(self.tab_book):
             self._book_process_text(is_encrypt)
+        elif current_tab == str(self.tab_sym):
+            self._sym_process_text(is_encrypt)
         else:
             self._trithemius_process_text(is_encrypt)
 
