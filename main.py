@@ -40,6 +40,26 @@ from pr5.cipher import (
     text_to_bytes,
     to_hex,
 )
+from pr7.cipher import (
+    NET_KEY_SIZES,
+    RSA_FACTORING_LIMITS,
+    RSA_PADDINGS,
+    TEXT_FORMATS,
+    TEXTBOOK_MAX_BITS,
+    TEXTBOOK_MIN_BITS,
+    MAX_XML_LENGTH,
+    WIKI_E,
+    WIKI_M,
+    WIKI_P,
+    WIKI_Q,
+    NetRSACipher,
+    RSAError,
+    RSAFactorAttack,
+    RSAKey,
+    TextbookRSA,
+    parse_int,
+    parse_numbers,
+)
 
 
 class App(tk.Tk):
@@ -72,6 +92,14 @@ class App(tk.Tk):
             "beale": BealeCipher(),
             "ottendorf": OttendorfCipher(),
         }
+
+        # --- ПР7: RSA ---
+        self.rsa_textbook = TextbookRSA()
+        self.rsa_key: RSAKey = TextbookRSA.make_key(WIKI_P, WIKI_Q, WIKI_E)
+        self.rsa_net = NetRSACipher(1024)
+        # None означає, що шифруємо власним відкритим ключем, інакше - імпортованим ключем отримувача
+        self.rsa_net_public_xml: Optional[str] = None
+        self.rsa_attack = RSAFactorAttack()
 
         # Спільні поля та аліаси для зворотної сумісності
         self.cipher = self.trithemius_cipher
@@ -150,7 +178,20 @@ class App(tk.Tk):
         self.notebook.add(self.tab_sym_file, text="📁 ПР5: CryptoStream (файли)")
         self._sym_build_file_tab()
 
-        # 10. Двійкове шифрування файлів (Binary) для всіх алгоритмів
+        # 10-12. ПР7: RSA
+        self.tab_rsa = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_rsa, text="🔑 ПР7: RSA (числовий приклад)")
+        self._rsa_build_tab()
+
+        self.tab_rsa_net = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_rsa_net, text="🔐 ПР7: RSA (.NET)")
+        self._rsa_net_build_tab()
+
+        self.tab_rsa_attack = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_rsa_attack, text="🔍 ПР7: Атака факторизацією")
+        self._rsa_build_attack_tab()
+
+        # 13. Двійкове шифрування файлів (Binary) для всіх алгоритмів
         self.tab_binary = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_binary, text="📁 Шифрування файлів (Binary)")
         self._binary_build_tab()
@@ -176,6 +217,12 @@ class App(tk.Tk):
             return self.book_txt_input, self.book_txt_output
         if current_tab == str(self.tab_sym):
             return self.sym_txt_input, self.sym_txt_output
+        if current_tab == str(self.tab_rsa):
+            return self.rsa_txt_input, self.rsa_txt_output
+        if current_tab == str(self.tab_rsa_net):
+            return self.rsa_net_txt_input, self.rsa_net_txt_output
+        if current_tab == str(self.tab_rsa_attack):
+            return self.rsa_attack_txt_input, self.rsa_attack_txt_output
         return self.trithemius_txt_input, self.trithemius_txt_output
 
     def file_new(self):
@@ -246,7 +293,9 @@ class App(tk.Tk):
             "• ПР2: «Шифр Тритеміуса» (2D/3D векторні ключі, Гасло, KPA-атака, Binary)\n"
             "• ПР3: «Книжковий шифр» (Віршований шифр, ключова таблиця, шифри Біла та Оттендорфа)\n"
             "• ПР5: «Шифр DES» (криптопровайдери .NET через pythonnet: DES, TripleDES, AES;\n"
-            "   режими ECB / CBC / CFB, доповнення, CryptoStream для тексту та файлів)\n\n"
+            "   режими ECB / CBC / CFB, доповнення, CryptoStream для тексту та файлів)\n"
+            "• ПР7: «Шифрування RSA» (числовий приклад, RSACryptoServiceProvider .NET, OAEP / PKCS#1,\n"
+            "   діалог формування відкритого ключа, атака факторизацією модуля n)\n\n"
             "Архітектура системи побудована на єдиному модульному класі APP,\n"
             "що автоматично розширюється при додаванні нових практичних робіт.\n",
         )
@@ -1284,6 +1333,500 @@ class App(tk.Tk):
             self.sym_lbl_file_status.config(text=str(e), foreground="red")
             messagebox.showerror("Помилка", f"Не вдалося обробити файл:\n{e}")
 
+    @staticmethod
+    def _rsa_short(value: int, limit: int = 48) -> str:
+        text = str(value)
+        return text if len(text) <= limit else f"{text[:20]}…{text[-20:]} ({len(text)} цифр)"
+
+    def _rsa_toolbar(self, parent: ttk.Frame, swap) -> ttk.Frame:
+        toolbar = ttk.Frame(parent)
+        toolbar.pack(fill=tk.X, padx=5, pady=4)
+        ttk.Button(toolbar, text="📄 Новий", command=self.file_new).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="📂 Відкрити", command=self.file_open).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="💾 Зберегти", command=self.file_save).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="🖨️ Друк", command=self.file_print).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="🔄 Поміняти місцями", command=swap).pack(side=tk.LEFT, padx=6)
+        return toolbar
+
+    def _rsa_text_pair(self, parent: ttk.Frame, sample: str, left: str = "Вхідний текст",
+                       right: str = "Результат") -> tuple[tk.Text, tk.Text]:
+        content = ttk.Frame(parent)
+        content.pack(fill=tk.BOTH, expand=True, padx=5, pady=4)
+        boxes = []
+        for title in (left, right):
+            frame = ttk.LabelFrame(content, text=title, padding=5)
+            frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=3)
+            text = tk.Text(frame, wrap=tk.WORD, font=("Consolas", 10), height=8)
+            text.pack(fill=tk.BOTH, expand=True)
+            boxes.append(text)
+        boxes[0].insert("1.0", sample)
+        return boxes[0], boxes[1]
+
+    def _rsa_swap(self, a: tk.Text, b: tk.Text):
+        first = self._get_text(a)
+        self._set_text(a, self._get_text(b))
+        self._set_text(b, first)
+
+    def _rsa_fail(self, label: ttk.Label, output: Optional[tk.Text], error: Exception, title: str = "Помилка обробки"):
+        if output is not None:
+            self._set_text(output, "")
+        label.config(text=str(error), foreground="red")
+        messagebox.showerror(title, str(error))
+
+    def _rsa_build_tab(self):
+        self._rsa_toolbar(self.tab_rsa, lambda: self._rsa_swap(self.rsa_txt_input, self.rsa_txt_output))
+
+        params = ttk.LabelFrame(self.tab_rsa, text="Параметри RSA на цілих числах (ПР7)", padding=8)
+        params.pack(fill=tk.X, padx=5, pady=4)
+        row = ttk.Frame(params)
+        row.pack(fill=tk.X, pady=2)
+        ttk.Button(row, text="🔑 Відкритий ключ...", command=lambda: self._rsa_open_key_dialog("textbook")).pack(side=tk.LEFT, padx=4)
+        ttk.Button(row, text="📖 Приклад з Вікіпедії", command=self._rsa_load_wiki_example).pack(side=tk.LEFT, padx=4)
+        ttk.Label(row, text="Дані:").pack(side=tk.LEFT, padx=(12, 4))
+        self.rsa_fmt_var = tk.StringVar(value=TEXT_FORMATS[0])
+        ttk.Combobox(row, textvariable=self.rsa_fmt_var, values=list(TEXT_FORMATS), state="readonly",
+                     width=13).pack(side=tk.LEFT, padx=2)
+        ttk.Button(row, text="🔒 Зашифрувати", command=lambda: self._rsa_process_text(True)).pack(side=tk.LEFT, padx=10)
+        ttk.Button(row, text="🔓 Розшифрувати", command=lambda: self._rsa_process_text(False)).pack(side=tk.LEFT, padx=2)
+
+        self.rsa_key_entries: dict[str, ttk.Entry] = {}
+        keys_row = ttk.Frame(params)
+        keys_row.pack(fill=tk.X, pady=2)
+        for name, width in (("n", 46), ("e", 10), ("d", 46)):
+            ttk.Label(keys_row, text=f"{name} =").pack(side=tk.LEFT, padx=(8, 2))
+            entry = ttk.Entry(keys_row, width=width, font=("Consolas", 10), state="readonly")
+            entry.pack(side=tk.LEFT, padx=2)
+            self.rsa_key_entries[name] = entry
+
+        self.rsa_txt_input, self.rsa_txt_output = self._rsa_text_pair(
+            self.tab_rsa, str(WIKI_M), "Вхідні дані (числа m < n або текст)", "Результат")
+
+        calc = ttk.LabelFrame(self.tab_rsa, text="Покроковий розрахунок", padding=5)
+        calc.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+        self.rsa_txt_calc = tk.Text(calc, wrap=tk.NONE, font=("Consolas", 10), height=10)
+        self.rsa_txt_calc.pack(fill=tk.BOTH, expand=True)
+
+        self.rsa_lbl_status = ttk.Label(self.tab_rsa, text="", font=("Arial", 9, "bold"), foreground="darkblue")
+        self.rsa_lbl_status.pack(anchor=tk.W, padx=8, pady=(0, 6))
+        self._rsa_set_key(self.rsa_key)
+
+    def _rsa_set_key(self, key: RSAKey):
+        self.rsa_key = key
+        for name, entry in self.rsa_key_entries.items():
+            value = getattr(key, name)
+            self._sym_set_entry(entry, "" if value is None else str(value))
+        self._set_text(self.rsa_txt_calc, TextbookRSA.describe(key))
+        self.rsa_lbl_status.config(text=f"Ключ RSA: n має {key.bits} біт", foreground="darkblue")
+
+    def _rsa_load_wiki_example(self):
+        self._rsa_set_key(TextbookRSA.make_key(WIKI_P, WIKI_Q, WIKI_E))
+        self.rsa_fmt_var.set(TEXT_FORMATS[0])
+        self._set_text(self.rsa_txt_input, str(WIKI_M))
+        self._set_text(self.rsa_txt_output, "")
+
+    def _rsa_process_text(self, is_encrypt: bool):
+        key, text = self.rsa_key, self._get_text(self.rsa_txt_input)
+        as_text = self.rsa_fmt_var.get() != TEXT_FORMATS[0]
+        try:
+            if is_encrypt:
+                if as_text:
+                    result = self.rsa_textbook.encrypt_text(text, key)
+                    source = self.rsa_textbook.text_to_blocks(text, key)
+                else:
+                    source = parse_numbers(text, "Повідомлення")
+                    result = self.rsa_textbook.encrypt(source, key)
+                lines = [f"c{i} = m^e mod n = {self._rsa_short(m)}^{key.e} mod {self._rsa_short(key.n)} = {self._rsa_short(c)}"
+                         for i, (m, c) in enumerate(zip(source, result), 1)]
+                output = " ".join(map(str, result))
+                status = f"Зашифровано {len(result)} блок(ів) відкритим ключем (e, n)"
+            else:
+                blocks = parse_numbers(text)
+                plain = self.rsa_textbook.decrypt(blocks, key)
+                lines = [f"m{i} = c^d mod n = {self._rsa_short(c)}^{self._rsa_short(key.d)} mod {self._rsa_short(key.n)} = {self._rsa_short(m)}"
+                         for i, (c, m) in enumerate(zip(blocks, plain), 1)]
+                output = self.rsa_textbook.decrypt_text(blocks, key) if as_text else " ".join(map(str, plain))
+                status = f"Розшифровано {len(blocks)} блок(ів) закритим ключем (d, n)"
+            if len(lines) > 12:
+                lines = lines[:12] + [f"... ще {len(lines) - 12} блок(ів)"]
+            self._set_text(self.rsa_txt_output, output)
+            self._set_text(self.rsa_txt_calc, TextbookRSA.describe(key) + "\n\n" + "\n".join(lines))
+            self.rsa_lbl_status.config(text=status, foreground="darkblue")
+        except Exception as e:
+            self._rsa_fail(self.rsa_lbl_status, self.rsa_txt_output, e)
+
+    def _rsa_net_build_tab(self):
+        self._rsa_toolbar(self.tab_rsa_net, lambda: self._rsa_swap(self.rsa_net_txt_input, self.rsa_net_txt_output))
+
+        params = ttk.LabelFrame(self.tab_rsa_net, text="Криптопровайдер .NET RSACryptoServiceProvider (ПР7)", padding=8)
+        params.pack(fill=tk.X, padx=5, pady=4)
+        row = ttk.Frame(params)
+        row.pack(fill=tk.X, pady=2)
+        ttk.Button(row, text="🔑 Відкритий ключ...", command=lambda: self._rsa_open_key_dialog("net")).pack(side=tk.LEFT, padx=4)
+        ttk.Label(row, text="Доповнення:").pack(side=tk.LEFT, padx=(12, 4))
+        self.rsa_net_padding_var = tk.StringVar(value="OAEP")
+        padding_box = ttk.Combobox(row, textvariable=self.rsa_net_padding_var, values=list(RSA_PADDINGS),
+                                   state="readonly", width=7)
+        padding_box.pack(side=tk.LEFT, padx=2)
+        padding_box.bind("<<ComboboxSelected>>", lambda _e: self._rsa_net_refresh_info())
+        ttk.Label(row, text="Шифротекст:").pack(side=tk.LEFT, padx=(12, 4))
+        self.rsa_net_fmt_var = tk.StringVar(value="Base64")
+        ttk.Combobox(row, textvariable=self.rsa_net_fmt_var, values=list(OUTPUT_FORMATS), state="readonly",
+                     width=7).pack(side=tk.LEFT, padx=2)
+        ttk.Button(row, text="🔒 Зашифрувати", command=lambda: self._rsa_net_process_text(True)).pack(side=tk.LEFT, padx=10)
+        ttk.Button(row, text="🔓 Розшифрувати", command=lambda: self._rsa_net_process_text(False)).pack(side=tk.LEFT, padx=2)
+        self.rsa_net_lbl_info = ttk.Label(params, text="", font=("Arial", 8, "italic"))
+        self.rsa_net_lbl_info.pack(anchor=tk.W, padx=8, pady=2)
+
+        self.rsa_net_txt_input, self.rsa_net_txt_output = self._rsa_text_pair(
+            self.tab_rsa_net, "Data to encrypt. Безпека інформаційних систем, ТВ-31")
+
+        self.rsa_net_lbl_status = ttk.Label(self.tab_rsa_net, text="", font=("Arial", 9, "bold"), foreground="darkblue")
+        self.rsa_net_lbl_status.pack(anchor=tk.W, padx=8, pady=(0, 6))
+        self._rsa_net_refresh_info()
+
+    def _rsa_net_recipient(self) -> NetRSACipher:
+        if self.rsa_net_public_xml is None:
+            return self.rsa_net
+        return NetRSACipher(None, self.rsa_net_public_xml)
+
+    def _rsa_net_refresh_info(self):
+        try:
+            recipient = self._rsa_net_recipient()
+            padding = self.rsa_net_padding_var.get()
+            whose = "власний відкритий ключ" if self.rsa_net_public_xml is None else "імпортований відкритий ключ отримувача"
+            self.rsa_net_lbl_info.config(
+                text=f"Шифрування: {whose}, {recipient.key_size} біт, до {recipient.max_message_size(padding)} байт "
+                     f"з доповненням {padding}.   Розшифрування: власний закритий ключ, {self.rsa_net.key_size} біт."
+            )
+        except Exception as e:
+            self.rsa_net_lbl_info.config(text=str(e))
+
+    def _rsa_net_process_text(self, is_encrypt: bool):
+        text = self._get_text(self.rsa_net_txt_input)
+        padding, fmt = self.rsa_net_padding_var.get(), self.rsa_net_fmt_var.get()
+        try:
+            if is_encrypt:
+                result = self.rsa_net.encrypt_text(text, padding, self.rsa_net_public_xml, fmt)
+                status = f"RSA-{padding}: зашифровано відкритим ключем, {len(decode_input(result, fmt))} байт шифротексту"
+            else:
+                result = self.rsa_net.decrypt_text(text, padding, fmt)
+                status = f"RSA-{padding}: розшифровано закритим ключем, {len(result)} символів"
+            self._set_text(self.rsa_net_txt_output, result)
+            self.rsa_net_lbl_status.config(text=status, foreground="darkblue")
+        except Exception as e:
+            self._rsa_fail(self.rsa_net_lbl_status, self.rsa_net_txt_output, e)
+
+    def _rsa_open_key_dialog(self, page: str = "net"):
+        dlg = tk.Toplevel(self)
+        dlg.title("Формування відкритого ключа RSA")
+        dlg.geometry("980x680")
+        dlg.transient(self)
+        dlg.grab_set()
+        self.rsa_dialog = dlg
+
+        book = ttk.Notebook(dlg)
+        book.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        net_page = ttk.Frame(book, padding=8)
+        tb_page = ttk.Frame(book, padding=8)
+        book.add(net_page, text="🔐 .NET RSACryptoServiceProvider")
+        book.add(tb_page, text="🔑 Числовий RSA (p, q, e)")
+        self._rsa_build_net_key_page(net_page, dlg)
+        self._rsa_build_textbook_key_page(tb_page, dlg)
+        book.select(tb_page if page == "textbook" else net_page)
+
+        ttk.Button(dlg, text="Закрити", command=dlg.destroy).pack(anchor=tk.E, padx=10, pady=(0, 8))
+        return dlg
+
+    def _rsa_build_net_key_page(self, page: ttk.Frame, dlg: tk.Toplevel):
+        row = ttk.Frame(page)
+        row.pack(fill=tk.X, pady=4)
+        ttk.Label(row, text="Розмір ключа (біт):").pack(side=tk.LEFT, padx=4)
+        size_var = tk.StringVar(value=str(self.rsa_net.key_size))
+        ttk.Combobox(row, textvariable=size_var, values=[str(s) for s in NET_KEY_SIZES], width=8).pack(side=tk.LEFT, padx=4)
+        ttk.Button(row, text="🔑 Згенерувати пару ключів",
+                   command=lambda: generate()).pack(side=tk.LEFT, padx=8)
+        info = ttk.Label(page, text="", font=("Arial", 9, "bold"), foreground="darkblue", wraplength=920)
+        info.pack(anchor=tk.W, padx=4, pady=4)
+
+        pub_frame = ttk.LabelFrame(page, text="Відкритий ключ для шифрування: ToXmlString(false)", padding=5)
+        pub_frame.pack(fill=tk.BOTH, expand=True, pady=4)
+        pub_text = tk.Text(pub_frame, wrap=tk.CHAR, font=("Consolas", 9), height=7)
+        pub_text.pack(fill=tk.BOTH, expand=True)
+        pub_row = ttk.Frame(page)
+        pub_row.pack(fill=tk.X, pady=2)
+        ttk.Button(pub_row, text="📥 Імпортувати ключ з поля", command=lambda: import_key()).pack(side=tk.LEFT, padx=4)
+        ttk.Button(pub_row, text="📂 Завантажити .xml", command=lambda: load_key()).pack(side=tk.LEFT, padx=4)
+        ttk.Button(pub_row, text="💾 Зберегти відкритий ключ", command=lambda: save_key()).pack(side=tk.LEFT, padx=4)
+        ttk.Button(pub_row, text="🔄 Власний відкритий ключ", command=lambda: use_own()).pack(side=tk.LEFT, padx=4)
+
+        show_private = tk.BooleanVar(value=False)
+        ttk.Checkbutton(page, text="Показати закритий ключ ToXmlString(true) (зберігається лише в пам'яті провайдера)",
+                        variable=show_private, command=lambda: refresh()).pack(anchor=tk.W, pady=(8, 2))
+        priv_text = tk.Text(page, wrap=tk.CHAR, font=("Consolas", 9), height=7)
+        priv_text.pack(fill=tk.BOTH, expand=True)
+
+        def refresh(message: str = ""):
+            recipient = self._rsa_net_recipient()
+            n, e = recipient.public_numbers()
+            whose = "власний" if self.rsa_net_public_xml is None else "імпортований"
+            self._set_text(pub_text, recipient.export_xml(False))
+            priv_text.config(state="normal")
+            self._set_text(priv_text, self.rsa_net.export_xml(True) if show_private.get() else "")
+            priv_text.config(state="disabled")
+            info.config(text=(message + "\n" if message else "") +
+                        f"Відкритий ключ ({whose}): {recipient.key_size} біт, e = {e}, n = {self._rsa_short(n, 60)}",
+                        foreground="darkblue")
+            self._rsa_net_refresh_info()
+
+        def fail(error: Exception):
+            info.config(text=str(error), foreground="red")
+            messagebox.showerror("Помилка ключа", str(error), parent=dlg)
+
+        def generate():
+            try:
+                size = NetRSACipher.check_key_size(size_var.get())
+                dlg.config(cursor="watch")
+                dlg.update_idletasks()
+                self.rsa_net.generate(size)
+                self.rsa_net_public_xml = None
+                refresh(f"Згенеровано нову пару ключів {size} біт.")
+            except Exception as e:
+                fail(e)
+            finally:
+                dlg.config(cursor="")
+
+        def import_key(xml: Optional[str] = None):
+            try:
+                xml = self._get_text(pub_text) if xml is None else xml
+                imported = NetRSACipher(None, xml)
+                if imported.has_private:
+                    raise RSAError("У полі закритий ключ: для шифрування імпортуйте лише відкритий ключ ToXmlString(false).")
+                own = self.rsa_net.export_xml(False)
+                self.rsa_net_public_xml = None if imported.export_xml(False) == own else imported.export_xml(False)
+                refresh("Відкритий ключ імпортовано через FromXmlString.")
+            except Exception as e:
+                fail(e)
+
+        def load_key():
+            path = filedialog.askopenfilename(parent=dlg, title="Відкрити відкритий ключ",
+                                              filetypes=[("XML", "*.xml"), ("Усі файли", "*.*")])
+            if not path:
+                return
+            try:
+                if os.path.getsize(path) > MAX_XML_LENGTH:
+                    raise RSAError("Файл занадто великий для ключа RSA.")
+                with open(path, "r", encoding="utf-8") as f:
+                    import_key(f.read())
+            except (OSError, UnicodeDecodeError, RSAError) as e:
+                fail(RSAError(f"Не вдалося прочитати ключ: {e}"))
+
+        def save_key():
+            path = filedialog.asksaveasfilename(parent=dlg, title="Зберегти відкритий ключ", defaultextension=".xml",
+                                                filetypes=[("XML", "*.xml")])
+            if not path:
+                return
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(self._rsa_net_recipient().export_xml(False))
+                refresh(f"Відкритий ключ збережено: {path}")
+            except Exception as e:
+                fail(e)
+
+        def use_own():
+            self.rsa_net_public_xml = None
+            refresh("Для шифрування використовується власний відкритий ключ.")
+
+        refresh()
+        self.rsa_dialog_net = {"size": size_var, "generate": generate, "pub": pub_text, "import": import_key,
+                               "show_private": show_private, "refresh": refresh}
+
+    def _rsa_build_textbook_key_page(self, page: ttk.Frame, dlg: tk.Toplevel):
+        entries: dict[str, ttk.Entry] = {}
+        for name, title in (("p", "Просте p:"), ("q", "Просте q:"), ("e", "Відкрита експонента e:")):
+            row = ttk.Frame(page)
+            row.pack(fill=tk.X, pady=3)
+            ttk.Label(row, text=title, width=22).pack(side=tk.LEFT, padx=4)
+            entries[name] = ttk.Entry(row, width=90, font=("Consolas", 10))
+            entries[name].pack(side=tk.LEFT, padx=4)
+            value = getattr(self.rsa_key, name)
+            entries[name].insert(0, "" if value is None else str(value))
+
+        row = ttk.Frame(page)
+        row.pack(fill=tk.X, pady=6)
+        ttk.Button(row, text="🔑 Сформувати ключ", command=lambda: build()).pack(side=tk.LEFT, padx=4)
+        ttk.Button(row, text="📖 Приклад з Вікіпедії", command=lambda: wiki()).pack(side=tk.LEFT, padx=4)
+        ttk.Label(row, text="Розрядність n (біт):").pack(side=tk.LEFT, padx=(16, 4))
+        bits_var = tk.StringVar(value="64")
+        ttk.Spinbox(row, from_=TEXTBOOK_MIN_BITS, to=TEXTBOOK_MAX_BITS, increment=8, textvariable=bits_var,
+                    width=7).pack(side=tk.LEFT, padx=4)
+        ttk.Button(row, text="🔄 Згенерувати p, q", command=lambda: generate()).pack(side=tk.LEFT, padx=4)
+
+        info = ttk.Label(page, text="", font=("Arial", 9, "bold"), foreground="darkblue", wraplength=920)
+        info.pack(anchor=tk.W, padx=4, pady=4)
+        result = tk.Text(page, wrap=tk.CHAR, font=("Consolas", 10), height=14)
+        result.pack(fill=tk.BOTH, expand=True)
+
+        def apply(key: RSAKey, message: str):
+            for name in ("p", "q", "e"):
+                entries[name].delete(0, tk.END)
+                entries[name].insert(0, str(getattr(key, name)))
+            self._rsa_set_key(key)
+            self._set_text(result, TextbookRSA.describe(key))
+            info.config(text=message, foreground="darkblue")
+
+        def fail(error: Exception):
+            self._set_text(result, "")
+            info.config(text=str(error), foreground="red")
+            messagebox.showerror("Помилка ключа", str(error), parent=dlg)
+
+        def build():
+            try:
+                key = TextbookRSA.make_key(entries["p"].get(), entries["q"].get(), entries["e"].get())
+                apply(key, f"Ключ сформовано: n має {key.bits} біт.")
+            except Exception as e:
+                fail(e)
+
+        def wiki():
+            apply(TextbookRSA.make_key(WIKI_P, WIKI_Q, WIKI_E), "Ключ з прикладу Вікіпедії: p = 61, q = 53, e = 17.")
+
+        def generate():
+            try:
+                e_text = entries["e"].get().strip()
+                key = TextbookRSA.generate_key(bits_var.get(), e_text or None)
+                apply(key, f"Згенеровано випадкові прості p і q, n має {key.bits} біт.")
+            except Exception as e:
+                fail(e)
+
+        self._set_text(result, TextbookRSA.describe(self.rsa_key))
+        self.rsa_dialog_tb = {"entries": entries, "build": build, "wiki": wiki, "bits": bits_var, "generate": generate}
+
+    def _rsa_build_attack_tab(self):
+        tab = self.tab_rsa_attack
+        self._rsa_toolbar(tab, lambda: self._rsa_swap(self.rsa_attack_txt_input, self.rsa_attack_txt_output))
+
+        params = ttk.LabelFrame(tab, text="Атака на RSA розкладанням модуля n на прості множники (ПР7)", padding=8)
+        params.pack(fill=tk.X, padx=5, pady=4)
+        row = ttk.Frame(params)
+        row.pack(fill=tk.X, pady=2)
+        ttk.Label(row, text="n =").pack(side=tk.LEFT, padx=(4, 2))
+        self.rsa_attack_n = ttk.Entry(row, width=70, font=("Consolas", 10))
+        self.rsa_attack_n.pack(side=tk.LEFT, padx=2)
+        ttk.Label(row, text="e =").pack(side=tk.LEFT, padx=(10, 2))
+        self.rsa_attack_e = ttk.Entry(row, width=10, font=("Consolas", 10))
+        self.rsa_attack_e.pack(side=tk.LEFT, padx=2)
+        ttk.Label(row, text="Ліміт, с:").pack(side=tk.LEFT, padx=(10, 2))
+        self.rsa_attack_limit = tk.StringVar(value="30")
+        ttk.Spinbox(row, from_=1, to=600, textvariable=self.rsa_attack_limit, width=5).pack(side=tk.LEFT, padx=2)
+
+        row2 = ttk.Frame(params)
+        row2.pack(fill=tk.X, pady=4)
+        ttk.Button(row2, text="📥 Взяти з вкладки RSA", command=self._rsa_attack_take_from_tab).pack(side=tk.LEFT, padx=4)
+        ttk.Button(row2, text="🔍 Розкласти n і зламати", command=self._rsa_run_attack).pack(side=tk.LEFT, padx=4)
+        ttk.Label(row2, text="Розшифрувати як:").pack(side=tk.LEFT, padx=(12, 4))
+        self.rsa_attack_fmt = tk.StringVar(value=TEXT_FORMATS[1])
+        ttk.Combobox(row2, textvariable=self.rsa_attack_fmt, values=list(TEXT_FORMATS), state="readonly",
+                     width=13).pack(side=tk.LEFT, padx=2)
+
+        self.rsa_attack_txt_input, self.rsa_attack_txt_output = self._rsa_text_pair(
+            tab, "", "Перехоплений шифротекст (числа)", "Результат атаки")
+        self.rsa_attack_lbl_status = ttk.Label(tab, text="", font=("Arial", 9, "bold"), foreground="darkblue")
+        self.rsa_attack_lbl_status.pack(anchor=tk.W, padx=8)
+
+        bench = ttk.LabelFrame(tab, text="Область значень параметрів, за яких атака реальна", padding=6)
+        bench.pack(fill=tk.BOTH, expand=True, padx=5, pady=4)
+        brow = ttk.Frame(bench)
+        brow.pack(fill=tk.X, pady=2)
+        ttk.Label(brow, text="Розрядності n (біт):").pack(side=tk.LEFT, padx=4)
+        self.rsa_bench_bits = ttk.Entry(brow, width=44)
+        self.rsa_bench_bits.insert(0, "16 24 32 40 48 56 64 72 80 88 96")
+        self.rsa_bench_bits.pack(side=tk.LEFT, padx=4)
+        ttk.Label(brow, text="Ліміт на ключ, с:").pack(side=tk.LEFT, padx=(10, 2))
+        self.rsa_bench_limit = tk.StringVar(value="10")
+        ttk.Spinbox(brow, from_=1, to=120, textvariable=self.rsa_bench_limit, width=5).pack(side=tk.LEFT, padx=2)
+        self.rsa_bench_btn = ttk.Button(brow, text="📊 Дослідити межу", command=self._rsa_run_benchmark)
+        self.rsa_bench_btn.pack(side=tk.LEFT, padx=8)
+
+        tables = ttk.Frame(bench)
+        tables.pack(fill=tk.BOTH, expand=True)
+        columns = (("bits", "Біт", 50), ("n", "n", 260), ("p", "p", 170), ("q", "q", 170), ("time", "Час, с", 80),
+                   ("ok", "Результат", 90))
+        self.rsa_bench_tree = ttk.Treeview(tables, columns=[c[0] for c in columns], show="headings", height=8)
+        for cid, title, width in columns:
+            self.rsa_bench_tree.heading(cid, text=title)
+            self.rsa_bench_tree.column(cid, width=width, anchor=tk.CENTER if cid in ("bits", "time", "ok") else tk.W)
+        self.rsa_bench_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=3)
+
+        known = ttk.Treeview(tables, columns=("bits", "who", "cost"), show="headings", height=10)
+        for cid, title, width in (("bits", "Розмір n", 120), ("who", "Чим розкладається", 260), ("cost", "Час", 190)):
+            known.heading(cid, text=title)
+            known.column(cid, width=width)
+        for row_values in RSA_FACTORING_LIMITS:
+            known.insert("", tk.END, values=row_values)
+        known.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=3)
+
+    def _rsa_attack_take_from_tab(self):
+        self._sym_set_entry(self.rsa_attack_n, str(self.rsa_key.n))
+        self._sym_set_entry(self.rsa_attack_e, str(self.rsa_key.e))
+        self._set_text(self.rsa_attack_txt_input, self._get_text(self.rsa_txt_output))
+        self.rsa_attack_fmt.set(self.rsa_fmt_var.get())
+        self.rsa_attack_lbl_status.config(text="Взято відкритий ключ (n, e) і шифротекст з вкладки RSA", foreground="darkblue")
+
+    def _rsa_run_attack(self):
+        try:
+            limit = parse_int(self.rsa_attack_limit.get(), "Ліміт часу", 1)
+            self.config(cursor="watch")
+            self.update_idletasks()
+            res = self.rsa_attack.attack(self.rsa_attack_n.get(), self.rsa_attack_e.get(), float(limit))
+            key = res.key
+            lines = [f"Метод: {res.method}, час: {res.elapsed:.4f} с", TextbookRSA.describe(key)]
+            cipher_text = self._get_text(self.rsa_attack_txt_input)
+            if cipher_text.strip():
+                blocks = parse_numbers(cipher_text)
+                if self.rsa_attack_fmt.get() == TEXT_FORMATS[0]:
+                    plain = " ".join(map(str, self.rsa_textbook.decrypt(blocks, key)))
+                else:
+                    plain = self.rsa_textbook.decrypt_text(blocks, key)
+                lines.append(f"\nРозшифроване повідомлення:\n{plain}")
+            self._set_text(self.rsa_attack_txt_output, "\n".join(lines))
+            self.rsa_attack_lbl_status.config(
+                text=f"Ключ зламано: n = p·q розкладено за {res.elapsed:.4f} с ({res.method}), d = {self._rsa_short(key.d)}",
+                foreground="darkblue")
+        except Exception as e:
+            self._rsa_fail(self.rsa_attack_lbl_status, self.rsa_attack_txt_output, e, "Атака не вдалася")
+        finally:
+            self.config(cursor="")
+
+    def _rsa_run_benchmark(self):
+        try:
+            bits = parse_numbers(self.rsa_bench_bits.get(), "Розрядності")
+            for b in bits:
+                if not TEXTBOOK_MIN_BITS <= b <= 256:
+                    raise RSAError(f"Розрядність {b} поза межами {TEXTBOOK_MIN_BITS}..256 біт.")
+            limit = parse_int(self.rsa_bench_limit.get(), "Ліміт часу", 1)
+        except Exception as e:
+            self._rsa_fail(self.rsa_attack_lbl_status, None, e)
+            return
+
+        self.rsa_bench_tree.delete(*self.rsa_bench_tree.get_children())
+        self.rsa_bench_btn.config(state="disabled")
+
+        def add_row(row):
+            self.rsa_bench_tree.insert("", tk.END, values=(
+                row.bits, self._rsa_short(row.n, 36), row.p or "-", row.q or "-", f"{row.elapsed:.4f}",
+                "зламано" if row.success else "не вдалося"))
+            self.update()
+
+        try:
+            rows = self.rsa_attack.benchmark(bits, float(limit), add_row)
+            broken = [r.bits for r in rows if r.success]
+            self.rsa_attack_lbl_status.config(
+                text=f"Зламано {len(broken)} з {len(rows)} ключів; найбільший зламаний n має {max(broken, default=0)} біт",
+                foreground="darkblue")
+        except Exception as e:
+            self._rsa_fail(self.rsa_attack_lbl_status, None, e)
+        finally:
+            self.rsa_bench_btn.config(state="normal")
+
     def process_text(self, is_encrypt: bool):
         """Аліас для універсального виклику шифрування активної вкладки."""
         current_tab = self.notebook.select()
@@ -1295,6 +1838,12 @@ class App(tk.Tk):
             self._book_process_text(is_encrypt)
         elif current_tab == str(self.tab_sym):
             self._sym_process_text(is_encrypt)
+        elif current_tab == str(self.tab_rsa):
+            self._rsa_process_text(is_encrypt)
+        elif current_tab == str(self.tab_rsa_net):
+            self._rsa_net_process_text(is_encrypt)
+        elif current_tab == str(self.tab_rsa_attack):
+            self._rsa_run_attack()
         else:
             self._trithemius_process_text(is_encrypt)
 
