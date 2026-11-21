@@ -60,6 +60,22 @@ from pr7.cipher import (
     parse_int,
     parse_numbers,
 )
+from pr8.cipher import (
+    DSA_EXAMPLE_PUBLIC_XML,
+    DSA_EXAMPLE_SIGNATURE_B64,
+    EXAMPLE_MESSAGE,
+    RSA_EXAMPLE_SIGNATURE_HEX,
+    RSA_EXAMPLE_XML,
+    SIGNATURE_FORMATS,
+    NetDSASigner,
+    NetRSASigner,
+    NetSigner,
+    SignatureError,
+    compute_hash,
+    decode_signature,
+    encode_signature,
+    message_bytes,
+)
 
 
 class App(tk.Tk):
@@ -100,6 +116,13 @@ class App(tk.Tk):
         # None означає, що шифруємо власним відкритим ключем, інакше - імпортованим ключем отримувача
         self.rsa_net_public_xml: Optional[str] = None
         self.rsa_attack = RSAFactorAttack()
+
+        # --- ПР8: ЕЦП RSA / DSA ---
+        # verify_xml = None означає перевірку власним відкритим ключем, інакше - імпортованим ключем відправника
+        self.sig: dict[str, dict] = {
+            "RSA": {"signer": NetRSASigner(1024), "verify_xml": None},
+            "DSA": {"signer": NetDSASigner(1024), "verify_xml": None},
+        }
 
         # Спільні поля та аліаси для зворотної сумісності
         self.cipher = self.trithemius_cipher
@@ -191,6 +214,15 @@ class App(tk.Tk):
         self.notebook.add(self.tab_rsa_attack, text="🔍 ПР7: Атака факторизацією")
         self._rsa_build_attack_tab()
 
+        # 13-14. ПР8: ЕЦП RSA та DSA
+        self.tab_sig_rsa = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_sig_rsa, text="🔏 ПР8: ЕЦП RSA")
+        self._sig_build_tab("RSA", self.tab_sig_rsa)
+
+        self.tab_sig_dsa = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_sig_dsa, text="🔏 ПР8: ЕЦП DSA")
+        self._sig_build_tab("DSA", self.tab_sig_dsa)
+
         # 13. Двійкове шифрування файлів (Binary) для всіх алгоритмів
         self.tab_binary = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_binary, text="📁 Шифрування файлів (Binary)")
@@ -223,6 +255,10 @@ class App(tk.Tk):
             return self.rsa_net_txt_input, self.rsa_net_txt_output
         if current_tab == str(self.tab_rsa_attack):
             return self.rsa_attack_txt_input, self.rsa_attack_txt_output
+        if current_tab == str(self.tab_sig_rsa):
+            return self.sig["RSA"]["input"], self.sig["RSA"]["output"]
+        if current_tab == str(self.tab_sig_dsa):
+            return self.sig["DSA"]["input"], self.sig["DSA"]["output"]
         return self.trithemius_txt_input, self.trithemius_txt_output
 
     def file_new(self):
@@ -295,7 +331,9 @@ class App(tk.Tk):
             "• ПР5: «Шифр DES» (криптопровайдери .NET через pythonnet: DES, TripleDES, AES;\n"
             "   режими ECB / CBC / CFB, доповнення, CryptoStream для тексту та файлів)\n"
             "• ПР7: «Шифрування RSA» (числовий приклад, RSACryptoServiceProvider .NET, OAEP / PKCS#1,\n"
-            "   діалог формування відкритого ключа, атака факторизацією модуля n)\n\n"
+            "   діалог формування відкритого ключа, атака факторизацією модуля n)\n"
+            "• ПР8: «ЕЦП на основі RSA» (RSACryptoServiceProvider: SignHash / VerifyHash з SHA-1, SHA-256, SHA-512;\n"
+            "   ЕЦП DSA через DSACryptoServiceProvider, діалог формування ключів, приклади з методички)\n\n"
             "Архітектура системи побудована на єдиному модульному класі APP,\n"
             "що автоматично розширюється при додаванні нових практичних робіт.\n",
         )
@@ -1827,6 +1865,282 @@ class App(tk.Tk):
         finally:
             self.rsa_bench_btn.config(state="normal")
 
+    @staticmethod
+    def _sig_hex(data: bytes, limit: int = 64) -> str:
+        text = to_hex(data[:limit])
+        return text + (f"-… (ще {len(data) - limit} байт)" if len(data) > limit else "")
+
+    def _sig_build_tab(self, alg: str, tab: ttk.Frame):
+        st = self.sig[alg]
+        self._rsa_toolbar(tab, lambda: self._rsa_swap(st["input"], st["output"]))
+        provider = "RSACryptoServiceProvider" if alg == "RSA" else "DSACryptoServiceProvider"
+
+        params = ttk.LabelFrame(tab, text=f"Електронний цифровий підпис {alg}: .NET {provider} (ПР8)", padding=8)
+        params.pack(fill=tk.X, padx=5, pady=4)
+        row = ttk.Frame(params)
+        row.pack(fill=tk.X, pady=2)
+        ttk.Button(row, text="🔑 Ключі (відкритий / закритий)...",
+                   command=lambda: self._sig_open_key_dialog(alg)).pack(side=tk.LEFT, padx=4)
+        ttk.Label(row, text="Геш:").pack(side=tk.LEFT, padx=(12, 4))
+        st["hash"] = tk.StringVar(value="SHA1")
+        ttk.Combobox(row, textvariable=st["hash"], values=list(st["signer"].HASHES), state="readonly",
+                     width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Label(row, text="Формат підпису:").pack(side=tk.LEFT, padx=(12, 4))
+        st["fmt"] = tk.StringVar(value="HEX" if alg == "RSA" else "Base64")
+        fmt_box = ttk.Combobox(row, textvariable=st["fmt"], values=list(SIGNATURE_FORMATS), state="readonly", width=8)
+        fmt_box.pack(side=tk.LEFT, padx=2)
+        fmt_box.bind("<<ComboboxSelected>>", lambda _e: self._sig_convert_format(alg))
+        ttk.Button(row, text="🔒 Підписати", command=lambda: self._sig_process(alg, True)).pack(side=tk.LEFT, padx=10)
+        ttk.Button(row, text="🔓 Перевірити підпис", command=lambda: self._sig_process(alg, False)).pack(side=tk.LEFT, padx=2)
+        ttk.Button(row, text="📖 Приклад з методички", command=lambda: self._sig_load_example(alg)).pack(side=tk.LEFT, padx=10)
+        st["info"] = ttk.Label(params, text="", font=("Arial", 8, "italic"))
+        st["info"].pack(anchor=tk.W, padx=8, pady=2)
+
+        st["input"], st["output"] = self._rsa_text_pair(tab, EXAMPLE_MESSAGE, "Повідомлення", "Цифровий підпис")
+        st["fmt_shown"] = st["fmt"].get()
+
+        steps = ttk.LabelFrame(tab, text="Хід формування / перевірки ЕЦП", padding=5)
+        steps.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+        st["steps"] = tk.Text(steps, wrap=tk.CHAR, font=("Consolas", 10), height=10)
+        st["steps"].pack(fill=tk.BOTH, expand=True)
+
+        st["status"] = ttk.Label(tab, text="", font=("Arial", 9, "bold"), foreground="darkblue")
+        st["status"].pack(anchor=tk.W, padx=8, pady=(0, 6))
+        self._sig_refresh_info(alg)
+
+    def _sig_verifier(self, alg: str) -> NetSigner:
+        st = self.sig[alg]
+        return st["signer"] if st["verify_xml"] is None else type(st["signer"])(None, st["verify_xml"])
+
+    def _sig_refresh_info(self, alg: str):
+        st = self.sig[alg]
+        try:
+            signer, verifier = st["signer"], self._sig_verifier(alg)
+            own = "власна пара" if signer.has_private else "лише відкритий ключ (підписування неможливе)"
+            whose = "власний відкритий ключ" if st["verify_xml"] is None else "імпортований відкритий ключ відправника"
+            st["info"].config(text=f"Підписування: закритий ключ, {own}, {signer.key_size} біт, підпис "
+                                   f"{signer.signature_size} байт.   Перевірка: {whose}, {verifier.key_size} біт.")
+        except Exception as e:
+            st["info"].config(text=str(e))
+
+    def _sig_convert_format(self, alg: str):
+        st = self.sig[alg]
+        old, new = st["fmt_shown"], st["fmt"].get()
+        st["fmt_shown"] = new
+        text = self._get_text(st["output"]).strip()
+        if not text or old == new:
+            return
+        try:
+            self._set_text(st["output"], encode_signature(decode_signature(text, old), new))
+        except SignatureError:
+            pass  # у полі не підпис у старому форматі: залишаємо як є
+
+    def _sig_steps(self, alg: str, message: str, signature: bytes, verdict: Optional[bool] = None) -> str:
+        st = self.sig[alg]
+        algorithm, fmt = st["hash"].get(), st["fmt"].get()
+        data = message_bytes(message)
+        digest = compute_hash(data, algorithm)
+        lines = [
+            f"--- HexMessage ({len(data)} байт, UTF-8):", self._sig_hex(data),
+            f"--- Hash {algorithm} ({len(digest)} байт):", to_hex(digest),
+            f"--- Signature {alg} ({len(signature)} байт, {fmt}):", encode_signature(signature, fmt),
+        ]
+        if verdict is not None:
+            lines += ["--- Verdict:", f"{verdict} ({'підпис дійсний' if verdict else 'підпис НЕДІЙСНИЙ'})"]
+        return "\n".join(lines)
+
+    def _sig_process(self, alg: str, is_sign: bool):
+        st = self.sig[alg]
+        message = self._get_text(st["input"])
+        algorithm, fmt = st["hash"].get(), st["fmt"].get()
+        try:
+            if is_sign:
+                signature = st["signer"].sign(message, algorithm)
+                self._set_text(st["output"], encode_signature(signature, fmt))
+                st["fmt_shown"] = fmt
+                self._set_text(st["steps"], self._sig_steps(alg, message, signature))
+                note = ""
+                if st["verify_xml"] is not None:
+                    # Власний підпис перевіряється власним відкритим ключем, а не імпортованим ключем відправника
+                    st["verify_xml"] = None
+                    self._sig_refresh_info(alg)
+                    note = "; перевірка перемкнена на власний відкритий ключ"
+                st["status"].config(text=f"ЕЦП {alg}-{algorithm} сформовано закритим ключем: {len(signature)} байт{note}",
+                                    foreground="darkblue")
+                return
+            signature = decode_signature(self._get_text(st["output"]), fmt)
+            verdict = self._sig_verifier(alg).verify(message, signature, algorithm)
+            self._set_text(st["steps"], self._sig_steps(alg, message, signature, verdict))
+            if verdict:
+                st["status"].config(text=f"Підпис {alg} ДІЙСНИЙ: повідомлення не змінено, підписувач - власник ключа",
+                                    foreground="darkgreen")
+            else:
+                st["status"].config(text=f"Підпис {alg} НЕДІЙСНИЙ: повідомлення змінено або підпис створено іншим ключем",
+                                    foreground="red")
+                messagebox.showwarning("Перевірка ЕЦП", "Підпис недійсний: геш повідомлення не збігається з підписаним "
+                                                         "або підпис створено іншим закритим ключем.")
+        except Exception as e:
+            self._set_text(st["steps"], "")
+            st["status"].config(text=str(e), foreground="red")
+            messagebox.showerror("Помилка ЕЦП", str(e))
+
+    def _sig_load_example(self, alg: str):
+        st = self.sig[alg]
+        if alg == "RSA":
+            # У методичці XML містить і закритий ключ, тому підпис можна і перевірити, і відтворити
+            st["signer"].import_xml(RSA_EXAMPLE_XML)
+            st["verify_xml"] = None
+            st["fmt"].set("HEX")
+            signature = RSA_EXAMPLE_SIGNATURE_HEX
+        else:
+            st["verify_xml"] = DSA_EXAMPLE_PUBLIC_XML
+            st["fmt"].set("Base64")
+            signature = DSA_EXAMPLE_SIGNATURE_B64
+        st["fmt_shown"] = st["fmt"].get()
+        st["hash"].set("SHA1")
+        self._set_text(st["input"], EXAMPLE_MESSAGE)
+        self._set_text(st["output"], signature)
+        self._set_text(st["steps"], "")
+        self._sig_refresh_info(alg)
+        st["status"].config(text=f"Завантажено числовий приклад {alg} з методички: натисніть «Перевірити підпис»",
+                            foreground="darkblue")
+
+    def _sig_open_key_dialog(self, alg: str = "RSA"):
+        dlg = tk.Toplevel(self)
+        dlg.title("Формування ключів ЕЦП")
+        dlg.geometry("980x680")
+        dlg.transient(self)
+        dlg.grab_set()
+        self.sig_dialog = dlg
+
+        book = ttk.Notebook(dlg)
+        book.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        pages = {}
+        for name, provider in (("RSA", "RSACryptoServiceProvider"), ("DSA", "DSACryptoServiceProvider")):
+            pages[name] = ttk.Frame(book, padding=8)
+            book.add(pages[name], text=f"🔑 {name}: {provider}")
+            self._sig_build_key_page(name, pages[name], dlg)
+        book.select(pages[alg])
+
+        ttk.Button(dlg, text="Закрити", command=dlg.destroy).pack(anchor=tk.E, padx=10, pady=(0, 8))
+        return dlg
+
+    def _sig_build_key_page(self, alg: str, page: ttk.Frame, dlg: tk.Toplevel):
+        st = self.sig[alg]
+        signer_cls = type(st["signer"])
+        row = ttk.Frame(page)
+        row.pack(fill=tk.X, pady=4)
+        ttk.Label(row, text="Розмір ключа (біт):").pack(side=tk.LEFT, padx=4)
+        size_var = tk.StringVar(value=str(st["signer"].key_size))
+        ttk.Combobox(row, textvariable=size_var, values=[str(s) for s in signer_cls.KEY_SIZES],
+                     width=8).pack(side=tk.LEFT, padx=4)
+        ttk.Button(row, text="🔑 Згенерувати пару «відкритий - закритий»",
+                   command=lambda: generate()).pack(side=tk.LEFT, padx=8)
+        info = ttk.Label(page, text="", font=("Arial", 9, "bold"), foreground="darkblue", wraplength=920)
+        info.pack(anchor=tk.W, padx=4, pady=4)
+
+        pub_frame = ttk.LabelFrame(page, text="Відкритий ключ для перевірки підпису: ToXmlString(false)", padding=5)
+        pub_frame.pack(fill=tk.BOTH, expand=True, pady=4)
+        pub_text = tk.Text(pub_frame, wrap=tk.CHAR, font=("Consolas", 9), height=7)
+        pub_text.pack(fill=tk.BOTH, expand=True)
+        pub_row = ttk.Frame(page)
+        pub_row.pack(fill=tk.X, pady=2)
+        ttk.Button(pub_row, text="📥 Імпортувати ключ з поля", command=lambda: import_key()).pack(side=tk.LEFT, padx=4)
+        ttk.Button(pub_row, text="📂 Завантажити .xml", command=lambda: load_key()).pack(side=tk.LEFT, padx=4)
+        ttk.Button(pub_row, text="💾 Зберегти відкритий ключ", command=lambda: save_key()).pack(side=tk.LEFT, padx=4)
+        ttk.Button(pub_row, text="🔄 Власний відкритий ключ", command=lambda: use_own()).pack(side=tk.LEFT, padx=4)
+
+        show_private = tk.BooleanVar(value=False)
+        ttk.Checkbutton(page, text="Показати закритий ключ ToXmlString(true) (використовується лише для підписування)",
+                        variable=show_private, command=lambda: refresh()).pack(anchor=tk.W, pady=(8, 2))
+        priv_text = tk.Text(page, wrap=tk.CHAR, font=("Consolas", 9), height=7)
+        priv_text.pack(fill=tk.BOTH, expand=True)
+
+        def refresh(message: str = ""):
+            signer, verifier = st["signer"], self._sig_verifier(alg)
+            whose = "власний" if st["verify_xml"] is None else "імпортований ключ відправника"
+            self._set_text(pub_text, verifier.export_xml(False))
+            priv_text.config(state="normal")
+            private = signer.export_xml(True) if signer.has_private else "(закритого ключа немає)"
+            self._set_text(priv_text, private if show_private.get() else "")
+            priv_text.config(state="disabled")
+            if alg == "RSA":
+                n, e = verifier.public_numbers()
+                numbers = f"e = {e}, n = {self._rsa_short(n, 60)}"
+            else:
+                p, q, _g, y = verifier.public_numbers()
+                numbers = f"p: {p.bit_length()} біт, q: {q.bit_length()} біт, y = {self._rsa_short(y, 60)}"
+            info.config(text=(message + "\n" if message else "") +
+                        f"Відкритий ключ ({whose}): {verifier.key_size} біт, {numbers}", foreground="darkblue")
+            self._sig_refresh_info(alg)
+
+        def fail(error: Exception):
+            info.config(text=str(error), foreground="red")
+            messagebox.showerror("Помилка ключа", str(error), parent=dlg)
+
+        def generate():
+            try:
+                size = signer_cls.check_key_size(size_var.get())
+                dlg.config(cursor="watch")
+                dlg.update_idletasks()
+                st["signer"].generate(size)
+                st["verify_xml"] = None
+                refresh(f"Згенеровано нову пару ключів {alg} {size} біт.")
+            except Exception as e:
+                fail(e)
+            finally:
+                dlg.config(cursor="")
+
+        def import_key(xml: Optional[str] = None):
+            try:
+                xml = self._get_text(pub_text) if xml is None else xml
+                imported = signer_cls(None, xml)
+                if imported.has_private:
+                    # Повний ключ стає власною парою: ним можна і підписувати, і перевіряти
+                    st["signer"].import_xml(xml)
+                    st["verify_xml"] = None
+                    refresh("Імпортовано повний ключ (із закритою частиною): він тепер використовується для підписування.")
+                    return
+                own = st["signer"].export_xml(False)
+                public = imported.export_xml(False)
+                st["verify_xml"] = None if public == own else public
+                refresh("Відкритий ключ відправника імпортовано через FromXmlString: ним перевірятимуться підписи.")
+            except Exception as e:
+                fail(e)
+
+        def load_key():
+            path = filedialog.askopenfilename(parent=dlg, title=f"Відкрити ключ {alg}",
+                                              filetypes=[("XML", "*.xml"), ("Усі файли", "*.*")])
+            if not path:
+                return
+            try:
+                if os.path.getsize(path) > MAX_XML_LENGTH:
+                    raise SignatureError(f"Файл занадто великий для ключа {alg}.")
+                with open(path, "r", encoding="utf-8") as f:
+                    import_key(f.read())
+            except (OSError, UnicodeDecodeError, SignatureError) as e:
+                fail(SignatureError(f"Не вдалося прочитати ключ: {e}"))
+
+        def save_key():
+            path = filedialog.asksaveasfilename(parent=dlg, title=f"Зберегти відкритий ключ {alg}",
+                                                defaultextension=".xml", filetypes=[("XML", "*.xml")])
+            if not path:
+                return
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(self._sig_verifier(alg).export_xml(False))
+                refresh(f"Відкритий ключ збережено: {path}")
+            except Exception as e:
+                fail(e)
+
+        def use_own():
+            st["verify_xml"] = None
+            refresh("Для перевірки використовується власний відкритий ключ.")
+
+        refresh()
+        st["dialog"] = {"size": size_var, "generate": generate, "pub": pub_text, "import": import_key,
+                        "show_private": show_private, "refresh": refresh}
+
     def process_text(self, is_encrypt: bool):
         """Аліас для універсального виклику шифрування активної вкладки."""
         current_tab = self.notebook.select()
@@ -1844,6 +2158,10 @@ class App(tk.Tk):
             self._rsa_net_process_text(is_encrypt)
         elif current_tab == str(self.tab_rsa_attack):
             self._rsa_run_attack()
+        elif current_tab == str(self.tab_sig_rsa):
+            self._sig_process("RSA", is_encrypt)
+        elif current_tab == str(self.tab_sig_dsa):
+            self._sig_process("DSA", is_encrypt)
         else:
             self._trithemius_process_text(is_encrypt)
 
